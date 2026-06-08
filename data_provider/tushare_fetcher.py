@@ -501,7 +501,50 @@ class TushareFetcher(BaseFetcher):
                     start_date=ts_start,
                     end_date=ts_end,
                 )
-            
+
+                # ⭐ 前复权调整 (Forward Adjustment / qián fù quán)
+                # Tushare daily() 默认返回【不复权】价，会导致 MA/MACD/RSI/K 线形态
+                # 与同花顺/通达信默认视图不一致（尤其是近期发生过除权除息的股票）。
+                #
+                # 经典案例：300811 铂科新材在 2026-05-28 发生 1.4x 股本变动（adj_factor
+                # 由 4.6334 跳到 6.4971），旧报告用不复权价算出来的 MA20=99.36，
+                # 而同花顺前复权显示 MA20≈81.28，差距巨大且直接导致趋势判断反向。
+                #
+                # 修复：拉一次 adj_factor，按当前 adj_factor 归一化 OHLC 四个价。
+                #   qfq_price = price * adj_factor_at_that_day / current_adj_factor
+                # 注意：保留 pre_close / change / pct_chg 不动（涨跌比 adj_factor 会
+                # 抵消，结果几乎一致；改了反而破坏 Tushare 自带的 pre_close 关系链）。
+                if df is not None and not df.empty:
+                    try:
+                        adj_df = self._call_api_with_rate_limit(
+                            "adj_factor",
+                            ts_code=ts_code,
+                            start_date=ts_start,
+                            end_date=ts_end,
+                        )
+                        if adj_df is not None and not adj_df.empty:
+                            current_adj = float(adj_df['adj_factor'].max())
+                            if current_adj > 0:
+                                df = df.merge(
+                                    adj_df[['trade_date', 'adj_factor']],
+                                    on='trade_date',
+                                    how='left',
+                                )
+                                # 停牌日可能没有 adj_factor 记录，用 current_adj 兜底
+                                df['adj_factor'] = df['adj_factor'].fillna(current_adj)
+                                for col in ('open', 'high', 'low', 'close'):
+                                    if col in df.columns:
+                                        df[col] = df[col] * df['adj_factor'] / current_adj
+                                df = df.drop(columns=['adj_factor'])
+                                logger.debug(
+                                    f"[Tushare] 已应用前复权: {ts_code} "
+                                    f"current_adj={current_adj}"
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"[Tushare] 前复权调整失败，回退到不复权价: {ts_code} {e}"
+                        )
+
             return df
             
         except Exception as e:
@@ -529,6 +572,9 @@ class TushareFetcher(BaseFetcher):
         - amount 按「千元」计，乘以 1000 转为「元」
 
         港股 hk_daily 返回的 vol / amount 已是可直接使用的量级，不做上述缩放。
+
+        注意：_fetch_raw_data 中已对 A 股 OHLC 应用前复权（基于 adj_factor），
+        此处不再做复权处理。
         """
         df = df.copy()
         is_hk = _is_hk_market(stock_code)
@@ -892,7 +938,7 @@ class TushareFetcher(BaseFetcher):
                 else:
                     if current_clock < '09:30': 
                         last_date = self._pick_trade_date(trade_dates, use_today=False)  # 拿取前一天的数据
-                    else:  # 即 '> 16:30'                  
+                    else:  # 即 '> 16:30'                
                         last_date = self._pick_trade_date(trade_dates, use_today=True)  # 拿取当天的数据
 
                 if last_date is None:
