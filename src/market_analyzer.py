@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
@@ -26,6 +26,19 @@ from src.core.market_profile import get_profile, MarketProfile
 from src.core.market_strategy import get_market_strategy_blueprint
 from src.schemas.market_light import MarketLightSnapshot
 from data_provider.base import DataFetcherManager
+
+
+# =============================================================================
+# 时区辅助：报告中的"生成时间"统一用 Asia/Shanghai (UTC+8)
+# GitHub Actions 容器默认是 UTC，直接用 _now_cn() 会比北京时间早 8 小时，
+# 导致报告里的"报告生成时间"和"报告日期"与用户实际感知错位。
+# =============================================================================
+_CN_TZ = timezone(timedelta(hours=8))
+
+
+def _now_cn() -> datetime:
+    """Return current time in Asia/Shanghai (UTC+8) for report timestamps."""
+    return datetime.now(_CN_TZ)
 
 logger = logging.getLogger(__name__)
 
@@ -327,7 +340,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         Returns:
             MarketOverview: 市场概览数据对象
         """
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = _now_cn().strftime('%Y-%m-%d')
         overview = MarketOverview(date=today)
         
         # 1. 获取主要指数行情（按 region 切换 A 股/美股）
@@ -557,7 +570,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             "region": self.region,
             "language": language,
             "title": title,
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": _now_cn().isoformat(),
             "date": overview.date,
             "market_scope": self._get_market_scope_name(language),
             "market_light": light,
@@ -1335,7 +1348,7 @@ Market conditions can change quickly. The data above is for reference only and d
 {self._get_strategy_markdown_block(template_language)}
 
 ---
-*Review Time: {datetime.now().strftime('%H:%M')}*
+*Review Time: {_now_cn().strftime('%H:%M')}*
 """
             return report
 
@@ -1369,7 +1382,7 @@ Market conditions can change quickly. The data above is for reference only and d
 - 市场有风险，投资需谨慎。以上数据仅供参考，不构成投资建议。
 
 ---
-*复盘时间: {datetime.now().strftime('%H:%M')}*
+*复盘时间: {_now_cn().strftime('%H:%M')}*
 """
     
     def _run_daily_review_parts(self) -> MarketLightReviewResult:
